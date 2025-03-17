@@ -1,14 +1,10 @@
 use std::{
-    ffi::CStr,
-    fmt::Display,
-    fs::{self, File},
-    io::{stdout, BufRead, BufReader, Read},
-    str::FromStr,
+    ffi::CStr, fmt::Display, fs::{self, File}, io::{stdout, BufRead, BufReader, Read}, path::PathBuf, str::FromStr
 };
 
 use anyhow::Context;
 use clap::{Parser, Subcommand};
-use flate2::read::ZlibDecoder;
+use flate2::{read::ZlibDecoder, write::ZlibEncoder, Compression};
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -26,6 +22,12 @@ enum Command {
 
         object_key: String,
     },
+    HashObject {
+        file_path: PathBuf,
+
+        #[clap(short = 'w')]
+        write: bool,
+    }
 }
 
 enum FileType {
@@ -105,7 +107,7 @@ fn main() -> anyhow::Result<()> {
                 .context("Unknown object type: {file_type}")?;
 
             // TODO: dynamic type for size, big files might need more than usize for content size
-            let size = size.parse::<usize>().context("Parsing content size")?;
+            let size = size.parse::<u64>().context("Parsing content size")?;
 
             println!("Size: {size}");
 
@@ -114,6 +116,13 @@ fn main() -> anyhow::Result<()> {
 
             // TODO: proper handling of commit and tree objects
             std::io::copy(&mut reader, &mut stdout).context("Printing file content")?;
+        },
+        Command::HashObject { file_path, write } => {
+            let metadata = fs::metadata(&file_path).context("Stating the file")?;
+            let size = metadata.len();
+            let header = format!("blob {size}\0");
+            let file = File::open(file_path).context("Opening file")?;
+            let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
         }
     }
     Ok(())
