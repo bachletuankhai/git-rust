@@ -1,13 +1,13 @@
 use std::{
     ffi::CStr,
+    fmt::Display,
     fs::{self, File},
-    io::{stdout, BufRead, BufReader, Read, Write}, str::FromStr,
+    io::{stdout, BufRead, BufReader, Read},
+    str::FromStr,
 };
 
-use clap::{
-    error::{Error, ErrorKind},
-    Parser, Subcommand,
-};
+use anyhow::Context;
+use clap::{Parser, Subcommand};
 use flate2::read::ZlibDecoder;
 
 #[derive(Parser, Debug)]
@@ -31,11 +31,20 @@ enum Command {
 enum FileType {
     Blob,
     Tree,
-    Commit
+    Commit,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct FileTypeParseError;
+
+impl Display for FileTypeParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Unknown object type")
+    }
+}
+
+impl std::error::Error for FileTypeParseError {}
+
 impl FromStr for FileType {
     type Err = FileTypeParseError;
 
@@ -44,59 +53,67 @@ impl FromStr for FileType {
             "blob" => Ok(FileType::Blob),
             "tree" => Ok(FileType::Tree),
             "commit" => Ok(FileType::Commit),
-            _ => Err(FileTypeParseError)
+            _ => Err(FileTypeParseError),
         }
     }
 }
 
-fn main() -> Result<(), Error> {
+fn main() -> anyhow::Result<()> {
     let args = Cli::parse();
     match args.command {
         Command::Init => {
-            fs::create_dir(".git").unwrap();
-            fs::create_dir(".git/objects").unwrap();
-            fs::create_dir(".git/refs").unwrap();
-            fs::write(".git/HEAD", "ref: refs/heads/main\n").unwrap();
+            fs::create_dir(".git").context("Failed to create .git directory")?;
+            fs::create_dir(".git/objects").context("Failed to create .git/objects directory")?;
+            fs::create_dir(".git/refs").context("Failed to create .git/refs directory")?;
+            fs::write(".git/HEAD", "ref: refs/heads/main\n")
+                .context("Failed to initialize HEAD ref")?;
+            println!("Git repo inited!");
         }
         Command::CatFile {
             pretty_print,
             object_key,
         } => {
             // TODO: prefix match object key to single result
+            if !pretty_print {
+                return Ok(());
+            }
 
-            let object_path = format!(".git/objects/{}/{}", &object_key[..2], &object_key[2..]);
-
-            let file = File::open(object_path).expect("Cannot open file");
+            let file = File::open(format!(
+                ".git/objects/{}/{}",
+                &object_key[..2],
+                &object_key[2..]
+            ))
+            .context("Cannot open {object_path}")?;
 
             let zlib_decoder = ZlibDecoder::new(file);
             let mut reader = BufReader::new(zlib_decoder);
             let mut buf: Vec<u8> = Vec::new();
-            reader.read_until(0, &mut buf).unwrap();
+            reader
+                .read_until(0, &mut buf)
+                .context("Reading git object header")?;
 
             let str = CStr::from_bytes_with_nul(&buf)
-                .expect("header should end with nul")
+                .context("header should end with nul")?
                 .to_str()
-                .unwrap();
+                .context("Convert CStr to str")?;
 
             let Some((file_type, size)) = str.split_once(' ') else {
-                return Err(Error::new(ErrorKind::InvalidValue));
+                anyhow::bail!("Unknown header format: {str}, expecting '<object_type> <size>'");
             };
-            // let file_type = file_type.parse::<FileType>().unwrap();
-            
-            if file_type != "blob" {
-                return Err(Error::new(ErrorKind::InvalidValue));
-            }
+            file_type
+                .parse::<FileType>()
+                .context("Unknown object type: {file_type}")?;
 
-            let size = size.parse::<usize>().expect("Size");
-            buf.clear();
-            buf.resize(size, 0);
-            let _ = reader.read_exact(&mut buf).expect("read file error");
+            // TODO: dynamic type for size, big files might need more than usize for content size
+            let size = size.parse::<usize>().context("Parsing content size")?;
 
-            let n = reader.read(&mut [0]).unwrap();
-            assert_eq!(n, 0);
+            println!("Size: {size}");
 
+            let mut reader = reader.take(size.try_into().context("Trying to convert size to u64")?);
             let mut stdout = stdout().lock();
-            let _ = stdout.write_all(&buf);
+
+            // TODO: proper handling of commit and tree objects
+            std::io::copy(&mut reader, &mut stdout).context("Printing file content")?;
         }
     }
     Ok(())
