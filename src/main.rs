@@ -1,10 +1,16 @@
 use std::{
-    ffi::CStr, fmt::Display, fs::{self, File}, io::{stdout, BufRead, BufReader, Read}, path::PathBuf, str::FromStr
+    ffi::CStr,
+    fmt::Display,
+    fs::{self, File},
+    io::{stdout, BufRead, BufReader, Read, Write},
+    path::{Path, PathBuf},
+    str::FromStr,
 };
 
 use anyhow::Context;
 use clap::{Parser, Subcommand};
 use flate2::{read::ZlibDecoder, write::ZlibEncoder, Compression};
+use sha1::{digest::Update, Digest};
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -27,7 +33,7 @@ enum Command {
 
         #[clap(short = 'w')]
         write: bool,
-    }
+    },
 }
 
 enum FileType {
@@ -57,6 +63,30 @@ impl FromStr for FileType {
             "commit" => Ok(FileType::Commit),
             _ => Err(FileTypeParseError),
         }
+    }
+}
+
+struct HashObjectWriter {
+    is_save: bool,
+    hasher: sha1::Sha1,
+}
+
+impl Write for HashObjectWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        Update::update(&mut self.hasher, buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        let old_hasher = self.hasher.clone();
+        let hash = old_hasher.finalize();
+        std::io::stdout().write_all(&hash)?;
+        if !self.is_save {
+            return Ok(());
+        }
+        self.hasher = sha1::Sha1::new();
+        // let write_file = File::create_new(format!(".git/objects/{:x?}/{}", hash[0], ))?;
+        Ok(())
     }
 }
 
@@ -116,13 +146,21 @@ fn main() -> anyhow::Result<()> {
 
             // TODO: proper handling of commit and tree objects
             std::io::copy(&mut reader, &mut stdout).context("Printing file content")?;
-        },
+        }
         Command::HashObject { file_path, write } => {
             let metadata = fs::metadata(&file_path).context("Stating the file")?;
             let size = metadata.len();
             let header = format!("blob {size}\0");
             let file = File::open(file_path).context("Opening file")?;
-            let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+            let mut encoder = ZlibEncoder::new(
+                HashObjectWriter {
+                    is_save: write,
+                    hasher: sha1::Sha1::new(),
+                },
+                Compression::default(),
+            );
+            encoder.write_all(header.as_bytes()).context("Writing header")?;
+            encoder.write_all(file.bytes());
         }
     }
     Ok(())
