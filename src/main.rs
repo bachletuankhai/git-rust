@@ -10,6 +10,7 @@ use std::{
 use anyhow::Context;
 use clap::{Parser, Subcommand};
 use flate2::{read::ZlibDecoder, write::ZlibEncoder, Compression};
+use hex::ToHex;
 use sha1::{digest::Update, Digest};
 
 #[derive(Parser, Debug)]
@@ -67,25 +68,18 @@ impl FromStr for FileType {
 }
 
 struct HashObjectWriter {
-    is_save: bool,
     hasher: sha1::Sha1,
+    compressor: ZlibEncoder<Write>,
 }
 
 impl Write for HashObjectWriter {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         Update::update(&mut self.hasher, buf);
+        self.compressor
         Ok(buf.len())
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
-        let old_hasher = self.hasher.clone();
-        let hash = old_hasher.finalize();
-        std::io::stdout().write_all(&hash)?;
-        if !self.is_save {
-            return Ok(());
-        }
-        self.hasher = sha1::Sha1::new();
-        // let write_file = File::create_new(format!(".git/objects/{:x?}/{}", hash[0], ))?;
         Ok(())
     }
 }
@@ -139,8 +133,6 @@ fn main() -> anyhow::Result<()> {
             // TODO: dynamic type for size, big files might need more than usize for content size
             let size = size.parse::<u64>().context("Parsing content size")?;
 
-            println!("Size: {size}");
-
             let mut reader = reader.take(size.try_into().context("Trying to convert size to u64")?);
             let mut stdout = stdout().lock();
 
@@ -150,17 +142,29 @@ fn main() -> anyhow::Result<()> {
         Command::HashObject { file_path, write } => {
             let metadata = fs::metadata(&file_path).context("Stating the file")?;
             let size = metadata.len();
-            let header = format!("blob {size}\0");
-            let file = File::open(file_path).context("Opening file")?;
+            let mut file = File::open(file_path).context("Opening file")?;
+            let content_sink: Box<dyn Write> = if write {
+                Box::new(File::create_new(".git/objects/temp_file").context("Creating temp file")?)
+            } else {
+                Box::new(std::io::sink())
+            };
             let mut encoder = ZlibEncoder::new(
                 HashObjectWriter {
-                    is_save: write,
+                    content_sink: content_sink,
                     hasher: sha1::Sha1::new(),
                 },
                 Compression::default(),
             );
-            encoder.write_all(header.as_bytes()).context("Writing header")?;
-            encoder.write_all(file.bytes());
+            write!(encoder, "blob {size}\0").context("Writing header")?;
+            std::io::copy(&mut file, &mut encoder).context("Writing file content")?;
+            let hash_writer = encoder.finish()?;
+            let hash = hash_writer.hasher.finalize();
+            let hash = hex::encode(hash);
+            println!("{hash}");
+            if write {
+                fs::create_dir_all(format!(".git/objects/{}", &hash[..2])).context("Creating object dir")?;
+                fs::rename(".git/objects/temp_file", format!(".git/objects/{}/{}", &hash[..2], &hash[2..])).context("Move temp file to actual file")?;
+            }
         }
     }
     Ok(())
