@@ -69,13 +69,13 @@ impl FromStr for FileType {
 
 struct HashObjectWriter {
     hasher: sha1::Sha1,
-    compressor: ZlibEncoder<Write>,
+    writer: Box<dyn Write>,
 }
 
 impl Write for HashObjectWriter {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         Update::update(&mut self.hasher, buf);
-        self.compressor
+        self.writer.write_all(buf)?;
         Ok(buf.len())
     }
 
@@ -148,17 +148,15 @@ fn main() -> anyhow::Result<()> {
             } else {
                 Box::new(std::io::sink())
             };
-            let mut encoder = ZlibEncoder::new(
-                HashObjectWriter {
-                    content_sink: content_sink,
-                    hasher: sha1::Sha1::new(),
-                },
-                Compression::default(),
-            );
-            write!(encoder, "blob {size}\0").context("Writing header")?;
-            std::io::copy(&mut file, &mut encoder).context("Writing file content")?;
-            let hash_writer = encoder.finish()?;
-            let hash = hash_writer.hasher.finalize();
+            let mut writer = HashObjectWriter {
+                hasher: sha1::Sha1::new(),
+                writer: Box::new(ZlibEncoder::new(content_sink, Compression::default()))
+            };
+            
+            write!(writer, "blob {size}\0").context("Writing header")?;
+            std::io::copy(&mut file, &mut writer).context("Writing file content")?;
+            writer.flush()?;
+            let hash = writer.hasher.finalize();
             let hash = hex::encode(hash);
             println!("{hash}");
             if write {
