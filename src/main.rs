@@ -3,14 +3,13 @@ use std::{
     fmt::Display,
     fs::{self, File},
     io::{stdout, BufRead, BufReader, Read, Write},
-    path::{Path, PathBuf},
+    path::PathBuf,
     str::FromStr,
 };
 
 use anyhow::Context;
 use clap::{Parser, Subcommand};
 use flate2::{read::ZlibDecoder, write::ZlibEncoder, Compression};
-use hex::ToHex;
 use sha1::{digest::Update, Digest};
 
 #[derive(Parser, Debug)]
@@ -150,9 +149,9 @@ fn main() -> anyhow::Result<()> {
             };
             let mut writer = HashObjectWriter {
                 hasher: sha1::Sha1::new(),
-                writer: Box::new(ZlibEncoder::new(content_sink, Compression::default()))
+                writer: Box::new(ZlibEncoder::new(content_sink, Compression::default())),
             };
-            
+
             write!(writer, "blob {size}\0").context("Writing header")?;
             std::io::copy(&mut file, &mut writer).context("Writing file content")?;
             writer.flush()?;
@@ -160,8 +159,13 @@ fn main() -> anyhow::Result<()> {
             let hash = hex::encode(hash);
             println!("{hash}");
             if write {
-                fs::create_dir_all(format!(".git/objects/{}", &hash[..2])).context("Creating object dir")?;
-                fs::rename(".git/objects/temp_file", format!(".git/objects/{}/{}", &hash[..2], &hash[2..])).context("Move temp file to actual file")?;
+                fs::create_dir_all(format!(".git/objects/{}", &hash[..2]))
+                    .context("Creating object dir")?;
+                fs::rename(
+                    ".git/objects/temp_file",
+                    format!(".git/objects/{}/{}", &hash[..2], &hash[2..]),
+                )
+                .context("Move temp file to actual file")?;
             }
         }
     }
