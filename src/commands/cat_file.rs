@@ -28,13 +28,13 @@ pub fn invoke(pretty_print: bool, object_key: &str) -> anyhow::Result<()> {
         anyhow::bail!("Unknown header format: {str}, expecting '<object_type> <size>'");
     };
     file_type
-        .parse::<crate::object::FileType>()
+        .parse::<crate::object::ObjectKind>()
         .context("Unknown object type: {file_type}")?;
 
     // TODO: dynamic type for size, big files might need more than usize for content size
     let size = size.parse::<u64>().context("Parsing content size")?;
 
-    let mut reader = reader.take(size.try_into().context("Trying to convert size to u64")?);
+    let mut reader = reader.take(size);
     let mut stdout = stdout().lock();
 
     // TODO: proper handling of commit and tree objects

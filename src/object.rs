@@ -1,8 +1,8 @@
-use std::fs;
+use std::{fs, io::Read};
 
 use anyhow::Context;
 
-pub enum FileType {
+pub enum ObjectKind {
     Blob,
     Tree,
     Commit,
@@ -18,18 +18,20 @@ impl std::fmt::Display for FileTypeParseError {
 }
 
 impl std::error::Error for FileTypeParseError {}
-impl std::str::FromStr for FileType {
+impl std::str::FromStr for ObjectKind {
     type Err = FileTypeParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "blob" => Ok(FileType::Blob),
-            "tree" => Ok(FileType::Tree),
-            "commit" => Ok(FileType::Commit),
+            "blob" => Ok(ObjectKind::Blob),
+            "tree" => Ok(ObjectKind::Tree),
+            "commit" => Ok(ObjectKind::Commit),
             _ => Err(FileTypeParseError),
         }
     }
 }
+
+pub mod read;
 
 pub fn open(object_hash: &str) -> anyhow::Result<std::fs::File> {
     if object_hash.len() < 4 || object_hash.len() > 40 {
