@@ -1,6 +1,6 @@
 use std::{
     ffi::CStr,
-    io::{stdout, BufRead, BufReader, Read},
+    io::{stdout, BufRead, BufReader},
 };
 
 use anyhow::Context;
@@ -27,15 +27,15 @@ pub fn invoke(pretty_print: bool, object_key: &str) -> anyhow::Result<()> {
     let Some((file_type, size)) = str.split_once(' ') else {
         anyhow::bail!("Unknown header format: {str}, expecting '<object_type> <size>'");
     };
-    file_type
+    let object_kind = file_type
         .parse::<crate::object::ObjectKind>()
         .context("Unknown object type: {file_type}")?;
 
     // TODO: dynamic type for size, big files might need more than usize for content size
     let size = size.parse::<u64>().context("Parsing content size")?;
 
-    let mut reader = reader.take(size);
-    let mut stdout = stdout().lock();
+    let mut reader = crate::object::read::GitObjectReader::new(object_kind, reader, size);
+    let mut stdout = stdout();
 
     // TODO: proper handling of commit and tree objects
     std::io::copy(&mut reader, &mut stdout).context("Printing file content")?;

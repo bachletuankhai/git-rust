@@ -88,3 +88,16 @@ pub fn create(object_hash: &str) -> anyhow::Result<fs::File> {
     hex::decode(object_hash).context("Non-hex object hash")?;
     create_str(object_hash)
 }
+
+pub struct TreeEntry {
+    mode: String,
+    kind: String,
+    name: String,
+    hash: String,
+}
+
+impl TreeEntry {
+    pub fn new() {
+        
+    }
+}
