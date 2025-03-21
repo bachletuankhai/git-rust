@@ -1,7 +1,4 @@
-use std::{
-    ffi::CStr,
-    io::{stdout, BufRead, BufReader},
-};
+use std::io::{stdout, BufReader};
 
 use anyhow::Context;
 use flate2::read::ZlibDecoder;
@@ -14,28 +11,12 @@ pub fn invoke(pretty_print: bool, object_key: &str) -> anyhow::Result<()> {
 
     let zlib_decoder = ZlibDecoder::new(file);
     let mut reader = BufReader::new(zlib_decoder);
-    let mut buf: Vec<u8> = Vec::new();
-    reader
-        .read_until(0, &mut buf)
-        .context("Reading git object header")?;
 
-    let str = CStr::from_bytes_with_nul(&buf)
-        .context("header should end with nul")?
-        .to_str()
-        .context("Convert CStr to str")?;
+    let (object_kind, size) =
+        crate::object::read::parse_header(&mut reader).context("Parsing object header")?;
 
-    let Some((file_type, size)) = str.split_once(' ') else {
-        anyhow::bail!("Unknown header format: {str}, expecting '<object_type> <size>'");
-    };
-    let object_kind = file_type
-        .parse::<crate::object::ObjectKind>()
-        .context("Unknown object type: {file_type}")?;
-
-    // TODO: dynamic type for size, big files might need more than usize for content size
-    let size = size.parse::<u64>().context("Parsing content size")?;
-
-    let mut reader = crate::object::read::GitObjectReader::new(object_kind, reader, size);
-    let mut stdout = stdout();
+    let mut reader = crate::object::read::GitObjectReader::new(object_kind, reader, size, None);
+    let mut stdout = stdout().lock();
 
     // TODO: proper handling of commit and tree objects
     std::io::copy(&mut reader, &mut stdout).context("Printing file content")?;
