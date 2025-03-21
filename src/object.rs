@@ -1,4 +1,5 @@
-use std::{fs, io::Read};
+use core::ffi;
+use std::{fmt::Display, fs};
 
 use anyhow::Context;
 
@@ -89,15 +90,37 @@ pub fn create(object_hash: &str) -> anyhow::Result<fs::File> {
     create_str(object_hash)
 }
 
-pub struct TreeEntry {
-    mode: String,
+pub struct TreeEntry<'a> {
+    mode: &'a str,
     kind: String,
-    name: String,
+    name: &'a str,
     hash: String,
 }
 
-impl TreeEntry {
-    pub fn new() {
-        
+impl<'a> TreeEntry<'a> {
+    pub fn parse(mode_name: &'a Vec<u8>, hash: &[u8; 20]) -> anyhow::Result<TreeEntry<'a>> {
+        let str = ffi::CStr::from_bytes_with_nul(mode_name)?;
+        let str = str.to_str().context("Converting Ctr to str")?;
+        let Some((mode, name)) = str.split_once(' ') else {
+            
+            anyhow::bail!("Unknown tree entry header: {str}");
+        };
+        let kind = match mode {
+            "40000" => String::from("tree"),
+            "100644" => String::from("blob"),
+            _ => anyhow::bail!("Unknown file mode: {mode}")
+        };
+        Ok(TreeEntry {
+            mode,
+            kind,
+            name,
+            hash: hex::encode(hash)
+        })
+    }
+}
+
+impl<'a> Display for TreeEntry<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:0>6} {} {}\t{}", self.mode, self.kind, self.hash, self.name)
     }
 }
