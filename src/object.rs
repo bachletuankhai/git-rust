@@ -34,6 +34,7 @@ impl std::str::FromStr for ObjectKind {
 }
 
 pub(crate) mod read;
+pub(crate) mod write;
 
 pub(crate) fn open(object_hash: &str) -> anyhow::Result<std::fs::File> {
     if object_hash.len() < 4 || object_hash.len() > 40 {
@@ -65,30 +66,6 @@ pub(crate) fn open(object_hash: &str) -> anyhow::Result<std::fs::File> {
         anyhow::bail!("Not found: {object_hash}");
     };
     fs::File::open(format!("{dir_name}/{}", file_name)).context("Opening object file")
-}
-
-pub(crate) fn create_hex(object_hash: &[u8; 20]) -> anyhow::Result<fs::File> {
-    let string_name = hex::encode(object_hash);
-    crate::object::create_str(&string_name)
-}
-
-fn create_str(object_key: &str) -> anyhow::Result<fs::File> {
-    fs::create_dir_all(format!(".git/objects/{}", &object_key[..2]))
-        .with_context(|| format!("Create dir .git/objects/{}", &object_key[..2]))?;
-    fs::File::create(format!(
-        ".git/objects/{}/{}",
-        &object_key[..2],
-        &object_key[2..]
-    ))
-    .context("Create object file")
-}
-
-pub(crate) fn create(object_hash: &str) -> anyhow::Result<fs::File> {
-    if object_hash.len() != 40 {
-        anyhow::bail!("Object hash must be 40 hex char");
-    }
-    hex::decode(object_hash).context("Non-hex object hash")?;
-    create_str(object_hash)
 }
 
 pub(crate) struct TreeEntry<'a> {
