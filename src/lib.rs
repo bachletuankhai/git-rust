@@ -1,2 +1,2 @@
-pub mod object;
+pub(crate) mod object;
 pub mod commands;

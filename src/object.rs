@@ -3,14 +3,15 @@ use std::{fmt::Display, fs};
 
 use anyhow::Context;
 
-pub enum ObjectKind {
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum ObjectKind {
     Blob,
     Tree,
     Commit,
 }
 
 #[derive(Debug)]
-pub struct FileTypeParseError;
+pub(crate) struct FileTypeParseError;
 
 impl std::fmt::Display for FileTypeParseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -32,9 +33,9 @@ impl std::str::FromStr for ObjectKind {
     }
 }
 
-pub mod read;
+pub(crate) mod read;
 
-pub fn open(object_hash: &str) -> anyhow::Result<std::fs::File> {
+pub(crate) fn open(object_hash: &str) -> anyhow::Result<std::fs::File> {
     if object_hash.len() < 4 || object_hash.len() > 40 {
         anyhow::bail!("");
     }
@@ -66,7 +67,7 @@ pub fn open(object_hash: &str) -> anyhow::Result<std::fs::File> {
     fs::File::open(format!("{dir_name}/{}", file_name)).context("Opening object file")
 }
 
-pub fn create_hex(object_hash: &[u8; 20]) -> anyhow::Result<fs::File> {
+pub(crate) fn create_hex(object_hash: &[u8; 20]) -> anyhow::Result<fs::File> {
     let string_name = hex::encode(object_hash);
     crate::object::create_str(&string_name)
 }
@@ -82,7 +83,7 @@ fn create_str(object_key: &str) -> anyhow::Result<fs::File> {
     .context("Create object file")
 }
 
-pub fn create(object_hash: &str) -> anyhow::Result<fs::File> {
+pub(crate) fn create(object_hash: &str) -> anyhow::Result<fs::File> {
     if object_hash.len() != 40 {
         anyhow::bail!("Object hash must be 40 hex char");
     }
@@ -90,7 +91,7 @@ pub fn create(object_hash: &str) -> anyhow::Result<fs::File> {
     create_str(object_hash)
 }
 
-pub struct TreeEntry<'a> {
+pub(crate) struct TreeEntry<'a> {
     mode: &'a str,
     kind: String,
     name: &'a str,
@@ -98,29 +99,32 @@ pub struct TreeEntry<'a> {
 }
 
 impl<'a> TreeEntry<'a> {
-    pub fn parse(mode_name: &'a Vec<u8>, hash: &[u8; 20]) -> anyhow::Result<TreeEntry<'a>> {
+    pub(crate) fn parse(mode_name: &'a Vec<u8>, hash: &[u8; 20]) -> anyhow::Result<TreeEntry<'a>> {
         let str = ffi::CStr::from_bytes_with_nul(mode_name)?;
         let str = str.to_str().context("Converting Ctr to str")?;
         let Some((mode, name)) = str.split_once(' ') else {
-            
             anyhow::bail!("Unknown tree entry header: {str}");
         };
         let kind = match mode {
             "40000" => String::from("tree"),
-            "100644" => String::from("blob"),
-            _ => anyhow::bail!("Unknown file mode: {mode}")
+            "100644" | "100755" | "120000" => String::from("blob"),
+            _ => anyhow::bail!("Unknown file mode: {mode}"),
         };
         Ok(TreeEntry {
             mode,
             kind,
             name,
-            hash: hex::encode(hash)
+            hash: hex::encode(hash),
         })
     }
 }
 
 impl<'a> Display for TreeEntry<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:0>6} {} {}\t{}", self.mode, self.kind, self.hash, self.name)
+        write!(
+            f,
+            "{:0>6} {} {}\t{}",
+            self.mode, self.kind, self.hash, self.name
+        )
     }
 }

@@ -24,7 +24,7 @@ impl Write for HashObjectWriter {
     }
 }
 
-pub fn invoke(file_path: &Path, write: bool) -> anyhow::Result<()> {
+pub(crate) fn invoke(file_path: &Path, write: bool) -> anyhow::Result<()> {
     let metadata = fs::metadata(&file_path).context("Stating the file")?;
     let size = metadata.len();
     let mut file = File::open(file_path).context("Opening file")?;

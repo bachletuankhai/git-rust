@@ -5,7 +5,7 @@ use flate2::read::ZlibDecoder;
 
 use crate::object::read::ReadOptions;
 
-pub fn invoke(name_only: bool, tree_hash: String) -> anyhow::Result<()> {
+pub(crate) fn invoke(name_only: bool, tree_hash: String) -> anyhow::Result<()> {
     let object_key = tree_hash;
     let file = crate::object::open(&object_key)
         .with_context(|| format!("Not a valid object name: {object_key}"))?;

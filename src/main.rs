@@ -1,4 +1,3 @@
-
 use clap::Parser;
 
 use git_rust::commands::Command;

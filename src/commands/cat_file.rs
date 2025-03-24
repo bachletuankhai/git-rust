@@ -3,7 +3,7 @@ use std::io::{stdout, BufReader};
 use anyhow::Context;
 use flate2::read::ZlibDecoder;
 
-pub fn invoke(pretty_print: bool, object_key: &str) -> anyhow::Result<()> {
+pub(crate) fn invoke(pretty_print: bool, object_key: &str) -> anyhow::Result<()> {
     anyhow::ensure!(pretty_print, "Missing flag: -p");
 
     let file = crate::object::open(&object_key)
@@ -18,7 +18,6 @@ pub fn invoke(pretty_print: bool, object_key: &str) -> anyhow::Result<()> {
     let mut reader = crate::object::read::GitObjectReader::new(object_kind, reader, size, None);
     let mut stdout = stdout().lock();
 
-    // TODO: proper handling of commit and tree objects
     std::io::copy(&mut reader, &mut stdout).context("Printing file content")?;
     Ok(())
 }

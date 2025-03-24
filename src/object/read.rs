@@ -10,18 +10,18 @@ use super::TreeEntry;
 
 use anyhow::Context;
 
-pub struct GitObjectReader<'a, R: Read> {
+pub(crate) struct GitObjectReader<'a, R: Read> {
     kind: ObjectKind,
     source: BufReader<Take<R>>,
     opt: Option<&'a ReadOptions>,
 }
 
-pub struct ReadOptions {
-    pub tree_name_only: bool,
+pub(crate) struct ReadOptions {
+    pub(crate) tree_name_only: bool,
 }
 
 impl<'a, R: Read> GitObjectReader<'a, R> {
-    pub fn new(
+    pub(crate) fn new(
         kind: ObjectKind,
         source: R,
         size: u64,
@@ -81,7 +81,7 @@ fn read_tree<R: Read>(
     Ok(write_pos)
 }
 
-pub fn parse_header<R: Read>(
+pub(crate) fn parse_header<R: Read>(
     source: &mut BufReader<R>,
 ) -> anyhow::Result<(crate::object::ObjectKind, u64)> {
     let mut buf: Vec<u8> = Vec::new();
