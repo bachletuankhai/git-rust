@@ -1,7 +1,5 @@
 use clap::Parser;
-
 use git_rust::commands::Command;
-use ignore::{gitignore::GitignoreBuilder, WalkBuilder};
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]

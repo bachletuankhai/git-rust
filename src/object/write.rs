@@ -5,6 +5,7 @@ use sha1::Digest;
 use std::{
     fs::{self, File, FileType},
     io::{Read, Write},
+    os::unix::fs::PermissionsExt,
     path::Path,
 };
 
@@ -25,10 +26,10 @@ impl Write for HashObjectWriter {
     }
 }
 
-fn write_tree(path: &Path) -> anyhow::Result<[u8; 20]> {
-    let read_dir = fs::read_dir(".").with_context(|| format!("Reading dir: {:?}", path))?;
+pub(crate) fn write_tree(path: &Path) -> anyhow::Result<[u8; 20]> {
     let mut buf: Vec<u8> = Vec::new();
-    for entry in WalkBuilder::new(".")
+    for entry in WalkBuilder::new(path)
+        .max_depth(Some(1))
         .standard_filters(false)
         .hidden(false)
         .parents(false)
@@ -38,10 +39,12 @@ fn write_tree(path: &Path) -> anyhow::Result<[u8; 20]> {
         .git_global(true)
         .filter_entry(|path| path.file_name() != ".git")
         .build()
+        .skip(1)
     {
         let Ok(entry) = entry else {
             continue;
         };
+        println!("{:?}", entry);
         let metadata = entry.metadata()?;
         let entry_path = entry.path();
         let file_name = entry.file_name().to_string_lossy();
@@ -50,16 +53,21 @@ fn write_tree(path: &Path) -> anyhow::Result<[u8; 20]> {
             continue;
         };
         let mode = if file_type.is_dir() {
-            "40000"
+            40000
         } else if file_type.is_file() {
-            "100644"
+            // TODO: support readonly for windows
+            if metadata.permissions().mode() & 0o111 != 0 {
+                100755
+            } else {
+                100644
+            }
         } else if file_type.is_symlink() {
-            "120000"
+            120000
         } else {
             anyhow::bail!("Unknown file type: {:?}", file_type)
         };
         // TODO: To append buf with entry data
-        write!(&mut buf, "{mode} {file_name}")?;
+        write!(&mut buf, "{mode} {file_name}\0")?;
 
         let entry_hash = if file_type.is_dir() {
             write_tree(entry_path)
@@ -68,10 +76,26 @@ fn write_tree(path: &Path) -> anyhow::Result<[u8; 20]> {
         } else {
             Err(anyhow::format_err!("Unknown file type {:?}", file_type))
         }?;
-        write!(&mut buf, entry_hash)?;
-
+        buf.extend_from_slice(&entry_hash);
+        println!("{:0>6} {} {}\t{}", mode, "blob", hex::encode(entry_hash), file_name);
     }
-    Ok([0; 20])
+    let size = buf.len();
+
+    let header = format!("tree {size}\0");
+    let mut hasher = sha1::Sha1::new();
+
+    hasher.update(header.as_bytes());
+    hasher.update(&buf);
+
+    let hash_bytes = hasher.finalize();
+    let hash = hex::encode(hash_bytes);
+
+    // let mut write_file = File::create(format!(".git/objects/{}/{}", &hash[..2], &hash[2..])).context("Creating tree file")?;
+    let mut write_file = std::io::sink();
+    write!(write_file, "tree {size}\0")?;
+    write_file.write_all(&buf)?;
+
+    Ok(hash_bytes.into())
 }
 
 fn write_blob(file_path: &Path) -> anyhow::Result<[u8; 20]> {

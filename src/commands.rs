@@ -5,6 +5,7 @@ mod cat_file;
 mod hash_object;
 mod init;
 mod ls_tree;
+mod write_tree;
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
@@ -26,6 +27,9 @@ pub enum Command {
         name_only: bool,
 
         tree_hash: String,
+    },
+    WriteTree {
+
     }
 }
 
@@ -38,7 +42,8 @@ impl Command {
                 object_key,
             } => cat_file::invoke(pretty_print, &object_key),
             Command::HashObject { file_path, write } => hash_object::invoke(&file_path, write),
-            Command::LsTree { name_only , tree_hash} => ls_tree::invoke(name_only, tree_hash)
+            Command::LsTree { name_only , tree_hash} => ls_tree::invoke(name_only, tree_hash),
+            Command::WriteTree {} => write_tree::invoke()
         }
     }
 }
