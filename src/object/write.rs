@@ -3,10 +3,11 @@ use flate2::{write::ZlibEncoder, Compression};
 use ignore::WalkBuilder;
 use sha1::Digest;
 use std::{
-    fs::{self, File, FileType},
-    io::{Read, Write},
+    cmp::Ordering,
+    fs::{self, File},
+    io::Write,
     os::unix::fs::PermissionsExt,
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 struct HashObjectWriter {
@@ -26,7 +27,7 @@ impl Write for HashObjectWriter {
     }
 }
 
-pub(crate) fn write_tree(path: &Path) -> anyhow::Result<[u8; 20]> {
+pub(crate) fn write_tree(path: &Path) -> anyhow::Result<Option<[u8; 20]>> {
     let mut buf: Vec<u8> = Vec::new();
     for entry in WalkBuilder::new(path)
         .max_depth(Some(1))
@@ -38,16 +39,41 @@ pub(crate) fn write_tree(path: &Path) -> anyhow::Result<[u8; 20]> {
         .git_ignore(true)
         .git_global(true)
         .filter_entry(|path| path.file_name() != ".git")
+        .sort_by_file_path(|file1, file2| {
+            // can unwrap since these files are not .. (parent)
+            let filename1 = file1.file_name().unwrap();
+            let filename1 = filename1.as_encoded_bytes();
+            let filename2 = file2.file_name().unwrap();
+            let filename2 = filename2.as_encoded_bytes();
+
+            let len = std::cmp::min(filename1.len(), filename2.len());
+            let cmp = filename1[..len].cmp(&filename2[..len]);
+            match cmp {
+                Ordering::Equal => {
+                    let c1 = if filename1.len() == len && file1.is_dir() {
+                        '/'
+                    } else {
+                        '\0'
+                    };
+                    let c2 = if filename2.len() == len && file2.is_dir() {
+                        '/'
+                    } else {
+                        '\0'
+                    };
+                    c1.cmp(&c2)
+                }
+                _ => cmp,
+            }
+        })
         .build()
         .skip(1)
     {
         let Ok(entry) = entry else {
             continue;
         };
-        println!("{:?}", entry);
         let metadata = entry.metadata()?;
         let entry_path = entry.path();
-        let file_name = entry.file_name().to_string_lossy();
+        let file_name = entry.file_name();
 
         let Some(file_type) = entry.file_type() else {
             continue;
@@ -67,20 +93,29 @@ pub(crate) fn write_tree(path: &Path) -> anyhow::Result<[u8; 20]> {
             anyhow::bail!("Unknown file type: {:?}", file_type)
         };
         // TODO: To append buf with entry data
-        write!(&mut buf, "{mode} {file_name}\0")?;
+        buf.extend(mode.to_string().as_bytes());
+        buf.push(b' ');
+        buf.extend(file_name.as_encoded_bytes());
+        buf.push(0);
 
         let entry_hash = if file_type.is_dir() {
-            write_tree(entry_path)
+            let Some(sub_dir_hash) =
+                write_tree(entry_path).context("Calculate hash for subdirectory")?
+            else {
+                continue;
+            };
+            sub_dir_hash
         } else if file_type.is_file() || file_type.is_symlink() {
-            write_blob(entry_path)
+            write_blob(entry_path)?
         } else {
-            Err(anyhow::format_err!("Unknown file type {:?}", file_type))
-        }?;
-        buf.extend_from_slice(&entry_hash);
-        println!("{:0>6} {} {}\t{}", mode, "blob", hex::encode(entry_hash), file_name);
+            anyhow::bail!("Unknown file type {:?}", file_type)
+        };
+        buf.extend(&entry_hash);
+    }
+    if buf.is_empty() {
+        return Ok(None);
     }
     let size = buf.len();
-
     let header = format!("tree {size}\0");
     let mut hasher = sha1::Sha1::new();
 
@@ -90,12 +125,19 @@ pub(crate) fn write_tree(path: &Path) -> anyhow::Result<[u8; 20]> {
     let hash_bytes = hasher.finalize();
     let hash = hex::encode(hash_bytes);
 
-    // let mut write_file = File::create(format!(".git/objects/{}/{}", &hash[..2], &hash[2..])).context("Creating tree file")?;
-    let mut write_file = std::io::sink();
-    write!(write_file, "tree {size}\0")?;
-    write_file.write_all(&buf)?;
+    let new_path = format!(".git/objects/{}/{}", &hash[..2], &hash[2..]);
+    let new_path = PathBuf::new().join(new_path);
+    let tmp_path = Path::new(".git/objects/.tmp_dir").join(path).join("tmp_file");
+    fs::create_dir_all(tmp_path.parent().unwrap()).context("Create tmp dir")?;
+    let write_file = File::create(&tmp_path).context("Create tmp file")?;
+    let mut zlib_encoder = ZlibEncoder::new(write_file, Compression::default());
 
-    Ok(hash_bytes.into())
+    write!(zlib_encoder, "tree {size}\0")?;
+    zlib_encoder.write_all(&buf)?;
+    fs::create_dir_all(new_path.parent().unwrap()).context("Create real dir")?;
+    fs::rename(&tmp_path, &new_path).context("Copy tmp file to real location")?;
+
+    Ok(Some(hash_bytes.into()))
 }
 
 fn write_blob(file_path: &Path) -> anyhow::Result<[u8; 20]> {
