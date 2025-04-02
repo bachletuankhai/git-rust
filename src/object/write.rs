@@ -5,17 +5,22 @@ use sha1::Digest;
 use std::{
     cmp::Ordering,
     fs::{self, File},
-    io::Write,
+    fmt::Write,
+    io::Write as IOWrite,
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
 };
 
+use crate::config::parse_config_from_file;
+
+// TODO: reorganize tree and commit writing code, isolate file writing functionality
+// to use in all object writing code (write to tmp file and copy to real file + chmod to read-only)
 struct HashObjectWriter {
     hasher: sha1::Sha1,
-    writer: Box<dyn Write>,
+    writer: Box<dyn IOWrite>,
 }
 
-impl Write for HashObjectWriter {
+impl IOWrite for HashObjectWriter {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         sha1::digest::Update::update(&mut self.hasher, buf);
         self.writer.write_all(buf)?;
@@ -144,6 +149,70 @@ fn write_blob(file_path: &Path) -> anyhow::Result<[u8; 20]> {
     calc_hash_object(file_path, true)
 }
 
+pub(crate) fn write_commit(tree_hash: String, parent: Option<String>, message: String) -> anyhow::Result<[u8; 20]> {
+    let git_config = parse_config_from_file(File::open(".git/config").context("Open git config file")?);
+    let Some(author) = git_config.get("user.name") else {
+        anyhow::bail!("No author name found in config");
+        };
+    let Some(email) = git_config.get("user.email") else {
+        anyhow::bail!("No author email found in config");
+        };
+    let mut commit = String::new();
+    writeln!(commit, "tree {tree_hash}")?;
+    if let Some(parent) = parent {
+        writeln!(commit, "parent {parent}")?;
+    };
+    let now = chrono::Local::now();
+    let timezone = now.offset().local_minus_utc() / 3600;
+    let timezone = if timezone >= 0 {
+        format!("+{:0>2}", timezone)
+    } else {
+        format!("-{:0>2}", -timezone)
+    };
+    writeln!(
+        commit,
+        "author {} <{}> {} {}00",
+        author,
+        email,
+        now.timestamp(),
+        timezone
+    )?;
+    writeln!(
+        commit,
+        "committer {} <{}> {} {}00\n",
+        author,
+        email,
+        now.timestamp(),
+        timezone
+    )?;
+    writeln!(commit, "{}", message)?;
+    let size = commit.len();
+    let header = format!("commit {size}\0");
+    let mut hasher = sha1::Sha1::new();
+    hasher.update(header.as_bytes());
+    hasher.update(commit.as_bytes());
+    let hash_bytes = hasher.finalize();
+    let hash = hex::encode(hash_bytes);
+
+    let tmp_file_path = Path::new(".git/objects/.tmp").join("commit_tmp");
+    let tmp_dir_path = tmp_file_path.parent().unwrap();
+    fs::create_dir_all(tmp_dir_path).context("Create temp path")?;
+    let write_file = File::create(&tmp_file_path).context("Create tmp file")?;
+    let mut zlib_encoder = ZlibEncoder::new(write_file, Compression::default());
+
+    write!(zlib_encoder, "commit {size}\0")?;
+    zlib_encoder.write_all(commit.as_bytes())?;
+    fs::create_dir_all(format!(".git/objects/{}", &hash[..2]))
+        .context("Creating object dir")?;
+    fs::rename(
+        &tmp_file_path,
+        format!(".git/objects/{}/{}", &hash[..2], &hash[2..]),
+    )
+    .context("Move temp file to actual file")?;
+
+    Ok(hash_bytes.into())
+}
+
 pub(crate) fn calc_hash_object(file_path: &Path, save_file: bool) -> anyhow::Result<[u8; 20]> {
     let metadata = fs::metadata(&file_path).context("Stating the file")?;
     let size = metadata.len();
@@ -152,7 +221,7 @@ pub(crate) fn calc_hash_object(file_path: &Path, save_file: bool) -> anyhow::Res
     // create tmp file
     let tmp_file_path = Path::new(".git/objects/.tmp").join(file_path);
     let tmp_dir_path = tmp_file_path.parent().unwrap();
-    let content_sink: Box<dyn Write> = if save_file {
+    let content_sink: Box<dyn IOWrite> = if save_file {
         fs::create_dir_all(tmp_dir_path).context("Create temp path")?;
         Box::new(File::create_new(&tmp_file_path).context("Creating temp file")?)
     } else {
